@@ -1,0 +1,15 @@
+# Build artefatti del modulo C++ (vengono ricompilati sul server)
+build/
+*.so
+*.o
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS / editor
+.DS_Store
+.vscode/
+
+# Streamlit
+.streamlit/secrets.toml
