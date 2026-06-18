@@ -898,7 +898,9 @@ def grafico_con_hover(fig, tipo, div_id, colori=None, height=430):
         ) % (div_id, json.dumps(pieni), json.dumps(sbiaditi))
 
     inner = fig.to_html(include_plotlyjs="cdn", full_html=False, div_id=div_id,
-                        config={"displayModeBar": False, "responsive": True},
+                        config={"displayModeBar": True, "displaylogo": False,
+                                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                                "responsive": True},
                         post_script=post)
     # transizioni CSS: l'opacità delle barre e il colore/opacità delle fette
     # cambiano in modo fluido invece che a scatti.
