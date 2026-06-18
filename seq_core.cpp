@@ -51,6 +51,26 @@ static double massa_residuo(char a) {
 // ma serve già qui per calcolare il GRAVY dentro analizza().
 static double kyte_doolittle(char a);
 
+// Parametri conformazionali di Chou-Fasman (×100): propensione di ciascun
+// amminoacido a elica (Pa), foglietto beta (Pb) e turn/coil (Pt).
+// Classifichiamo ogni residuo nella conformazione con propensione massima:
+// è una stima INDICATIVA della composizione, non una vera predizione strutturale.
+static void chou_fasman(char a, double& Pa, double& Pb, double& Pt) {
+    switch (a) {
+        case 'A': Pa=142; Pb=83;  Pt=66;  break;  case 'R': Pa=98;  Pb=93;  Pt=95;  break;
+        case 'N': Pa=67;  Pb=89;  Pt=156; break;  case 'D': Pa=101; Pb=54;  Pt=146; break;
+        case 'C': Pa=70;  Pb=119; Pt=119; break;  case 'Q': Pa=111; Pb=110; Pt=98;  break;
+        case 'E': Pa=151; Pb=37;  Pt=74;  break;  case 'G': Pa=57;  Pb=75;  Pt=156; break;
+        case 'H': Pa=100; Pb=87;  Pt=95;  break;  case 'I': Pa=108; Pb=160; Pt=47;  break;
+        case 'L': Pa=121; Pb=130; Pt=59;  break;  case 'K': Pa=114; Pb=74;  Pt=101; break;
+        case 'M': Pa=145; Pb=105; Pt=60;  break;  case 'F': Pa=113; Pb=138; Pt=60;  break;
+        case 'P': Pa=57;  Pb=55;  Pt=152; break;  case 'S': Pa=77;  Pb=75;  Pt=143; break;
+        case 'T': Pa=83;  Pb=119; Pt=96;  break;  case 'W': Pa=108; Pb=137; Pt=96;  break;
+        case 'Y': Pa=69;  Pb=147; Pt=114; break;  case 'V': Pa=106; Pb=170; Pt=50;  break;
+        default:  Pa=0;   Pb=0;   Pt=0;   break;
+    }
+}
+
 // Contributo di carica di una catena laterale a un dato pH.
 // Gruppi basici (positivi):  carica = +1 / (1 + 10^(pH - pKa))
 // Gruppi acidi (negativi):   carica = -1 / (1 + 10^(pKa - pH))
@@ -93,6 +113,9 @@ struct Risultato {
     double abs280_ox = 0.0;           // assorbanza di una soluzione 1 g/L (Cys ossidate)
     std::vector<double> titolazione_pH;     // curva di titolazione: asse pH
     std::vector<double> titolazione_carica; // curva di titolazione: carica netta
+    int ss_helix = 0;                 // residui classificati come elica (Chou-Fasman)
+    int ss_sheet = 0;                 // residui classificati come foglietto beta
+    int ss_coil = 0;                  // residui classificati come coil/turn
     std::map<char,int> conteggi;      // amminoacido -> numero
     std::map<std::string,int> classi; // classe chimica -> numero
 };
@@ -110,6 +133,11 @@ Risultato analizza(const std::string& seq_in) {
         c[a]++;
         massa += m;
         r.lunghezza++;
+        // struttura secondaria: assegno il residuo alla conformazione dominante
+        double Pa, Pb, Pt; chou_fasman(a, Pa, Pb, Pt);
+        if (Pa >= Pb && Pa >= Pt)      r.ss_helix++;
+        else if (Pb >= Pt)             r.ss_sheet++;
+        else                           r.ss_coil++;
     }
     if (r.lunghezza > 0) massa += 18.01528;   // aggiungo una molecola d'acqua
 
@@ -321,6 +349,9 @@ PYBIND11_MODULE(seq_core, m) {
         .def_readonly("abs280_ox", &Risultato::abs280_ox)
         .def_readonly("titolazione_pH", &Risultato::titolazione_pH)
         .def_readonly("titolazione_carica", &Risultato::titolazione_carica)
+        .def_readonly("ss_helix", &Risultato::ss_helix)
+        .def_readonly("ss_sheet", &Risultato::ss_sheet)
+        .def_readonly("ss_coil", &Risultato::ss_coil)
         .def_readonly("conteggi", &Risultato::conteggi)
         .def_readonly("classi", &Risultato::classi);
 

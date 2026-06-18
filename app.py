@@ -208,6 +208,18 @@ TESTI = {
         "titration_header": "📈 Titration curve (net charge vs pH)",
         "ax_ph": "pH", "ax_charge": "net charge", "titration_pi": "pI = {v}",
         "r_titration": "Titration curve (net charge vs pH)",
+        "ss_header": "🌀 Secondary structure composition (Chou-Fasman)",
+        "ss_helix": "Helix", "ss_sheet": "Sheet", "ss_coil": "Coil / turn",
+        "ss_note": "Indicative estimate from Chou-Fasman propensities — not a real structure prediction.",
+        "ss_chart_title": "Predicted secondary structure",
+        "compare_header": "🔬 Compare with a second protein",
+        "compare_label": "Paste the second sequence (plain text or FASTA)",
+        "compare_ph": "Paste a second protein sequence, or a full FASTA (with the > line)",
+        "btn_compare": "Compare",
+        "compare_metric": "Metric", "compare_a": "Sequence A", "compare_b": "Sequence B",
+        "compare_err": "No valid amino acid in the second sequence.",
+        "compare_chart_title": "Class composition: A vs B (%)",
+        "compare_y": "% of residues",
     },
     "it": {
         "page_title": "Analizzatore di sequenze proteiche",
@@ -303,6 +315,18 @@ TESTI = {
         "titration_header": "📈 Curva di titolazione (carica netta vs pH)",
         "ax_ph": "pH", "ax_charge": "carica netta", "titration_pi": "pI = {v}",
         "r_titration": "Curva di titolazione (carica netta vs pH)",
+        "ss_header": "🌀 Composizione in struttura secondaria (Chou-Fasman)",
+        "ss_helix": "Elica", "ss_sheet": "Foglietto β", "ss_coil": "Coil / turn",
+        "ss_note": "Stima indicativa dalle propensioni di Chou-Fasman — non è una vera predizione strutturale.",
+        "ss_chart_title": "Struttura secondaria stimata",
+        "compare_header": "🔬 Confronta con una seconda proteina",
+        "compare_label": "Incolla la seconda sequenza (testo o FASTA)",
+        "compare_ph": "Incolla una seconda sequenza proteica, oppure un FASTA completo (con la riga >)",
+        "btn_compare": "Confronta",
+        "compare_metric": "Metrica", "compare_a": "Sequenza A", "compare_b": "Sequenza B",
+        "compare_err": "Nessun amminoacido valido nella seconda sequenza.",
+        "compare_chart_title": "Composizione in classi: A vs B (%)",
+        "compare_y": "% dei residui",
     },
     "es": {
         "page_title": "Analizador de secuencias proteicas",
@@ -397,6 +421,18 @@ TESTI = {
         "titration_header": "📈 Curva de titulación (carga neta vs pH)",
         "ax_ph": "pH", "ax_charge": "carga neta", "titration_pi": "pI = {v}",
         "r_titration": "Curva de titulación (carga neta vs pH)",
+        "ss_header": "🌀 Composición de estructura secundaria (Chou-Fasman)",
+        "ss_helix": "Hélice", "ss_sheet": "Lámina β", "ss_coil": "Coil / giro",
+        "ss_note": "Estimación indicativa a partir de las propensiones de Chou-Fasman — no es una predicción estructural real.",
+        "ss_chart_title": "Estructura secundaria estimada",
+        "compare_header": "🔬 Comparar con una segunda proteína",
+        "compare_label": "Pega la segunda secuencia (texto o FASTA)",
+        "compare_ph": "Pega una segunda secuencia proteica, o un FASTA completo (con la línea >)",
+        "btn_compare": "Comparar",
+        "compare_metric": "Métrica", "compare_a": "Secuencia A", "compare_b": "Secuencia B",
+        "compare_err": "Ningún aminoácido válido en la segunda secuencia.",
+        "compare_chart_title": "Composición de clases: A vs B (%)",
+        "compare_y": "% de residuos",
     },
     "de": {
         "page_title": "Proteinsequenz-Analysator",
@@ -491,6 +527,18 @@ TESTI = {
         "titration_header": "📈 Titrationskurve (Nettoladung vs. pH)",
         "ax_ph": "pH", "ax_charge": "Nettoladung", "titration_pi": "pI = {v}",
         "r_titration": "Titrationskurve (Nettoladung vs. pH)",
+        "ss_header": "🌀 Sekundärstruktur-Zusammensetzung (Chou-Fasman)",
+        "ss_helix": "Helix", "ss_sheet": "Faltblatt", "ss_coil": "Coil / Turn",
+        "ss_note": "Indikative Schätzung aus Chou-Fasman-Propensitäten — keine echte Strukturvorhersage.",
+        "ss_chart_title": "Geschätzte Sekundärstruktur",
+        "compare_header": "🔬 Mit einem zweiten Protein vergleichen",
+        "compare_label": "Zweite Sequenz einfügen (Text oder FASTA)",
+        "compare_ph": "Füge eine zweite Proteinsequenz ein oder ein vollständiges FASTA (mit der >-Zeile)",
+        "btn_compare": "Vergleichen",
+        "compare_metric": "Kennzahl", "compare_a": "Sequenz A", "compare_b": "Sequenz B",
+        "compare_err": "Keine gültige Aminosäure in der zweiten Sequenz.",
+        "compare_chart_title": "Klassenzusammensetzung: A vs B (%)",
+        "compare_y": "% der Reste",
     },
     "fr": {
         "page_title": "Analyseur de séquences protéiques",
@@ -585,6 +633,18 @@ TESTI = {
         "titration_header": "📈 Courbe de titration (charge nette vs pH)",
         "ax_ph": "pH", "ax_charge": "charge nette", "titration_pi": "pI = {v}",
         "r_titration": "Courbe de titration (charge nette vs pH)",
+        "ss_header": "🌀 Composition en structure secondaire (Chou-Fasman)",
+        "ss_helix": "Hélice", "ss_sheet": "Feuillet β", "ss_coil": "Coil / coude",
+        "ss_note": "Estimation indicative à partir des propensions de Chou-Fasman — pas une vraie prédiction structurale.",
+        "ss_chart_title": "Structure secondaire estimée",
+        "compare_header": "🔬 Comparer avec une deuxième protéine",
+        "compare_label": "Collez la deuxième séquence (texte ou FASTA)",
+        "compare_ph": "Collez une deuxième séquence protéique, ou un FASTA complet (avec la ligne >)",
+        "btn_compare": "Comparer",
+        "compare_metric": "Métrique", "compare_a": "Séquence A", "compare_b": "Séquence B",
+        "compare_err": "Aucun acide aminé valide dans la deuxième séquence.",
+        "compare_chart_title": "Composition en classes : A vs B (%)",
+        "compare_y": "% des résidus",
     },
     "zh": {
         "page_title": "蛋白质序列分析器",
@@ -673,6 +733,18 @@ TESTI = {
         "titration_header": "📈 滴定曲线（净电荷 vs pH）",
         "ax_ph": "pH", "ax_charge": "净电荷", "titration_pi": "pI = {v}",
         "r_titration": "滴定曲线（净电荷 vs pH）",
+        "ss_header": "🌀 二级结构组成（Chou-Fasman）",
+        "ss_helix": "α-螺旋", "ss_sheet": "β-折叠", "ss_coil": "无规卷曲 / 转角",
+        "ss_note": "基于 Chou-Fasman 倾向性的指示性估计 —— 并非真正的结构预测。",
+        "ss_chart_title": "预测的二级结构",
+        "compare_header": "🔬 与第二条蛋白质比较",
+        "compare_label": "粘贴第二条序列（纯文本或 FASTA）",
+        "compare_ph": "粘贴第二条蛋白质序列，或完整的 FASTA（含 > 行）",
+        "btn_compare": "比较",
+        "compare_metric": "指标", "compare_a": "序列 A", "compare_b": "序列 B",
+        "compare_err": "第二条序列中没有有效的氨基酸。",
+        "compare_chart_title": "类别组成：A vs B（%）",
+        "compare_y": "残基百分比",
     },
 }
 
@@ -1075,6 +1147,28 @@ if testo:
     with st.expander(T["titration_header"]):
         st.plotly_chart(fig_tit)
 
+    # --- Struttura secondaria (Chou-Fasman, conteggi dal core C++) ---
+    ss_tot = r.ss_helix + r.ss_sheet + r.ss_coil
+    with st.expander(T["ss_header"]):
+        if ss_tot > 0:
+            s1, s2, s3 = st.columns(3)
+            s1.metric(T["ss_helix"], f"{100*r.ss_helix/ss_tot:.0f}%",
+                      f"{r.ss_helix} {T['unit_aa']}", delta_color="off")
+            s2.metric(T["ss_sheet"], f"{100*r.ss_sheet/ss_tot:.0f}%",
+                      f"{r.ss_sheet} {T['unit_aa']}", delta_color="off")
+            s3.metric(T["ss_coil"], f"{100*r.ss_coil/ss_tot:.0f}%",
+                      f"{r.ss_coil} {T['unit_aa']}", delta_color="off")
+            fig_ss = px.pie(names=[T["ss_helix"], T["ss_sheet"], T["ss_coil"]],
+                            values=[r.ss_helix, r.ss_sheet, r.ss_coil],
+                            title=T["ss_chart_title"], hole=0.4,
+                            color_discrete_sequence=["#e15759", "#4e79a7", "#bab0ac"])
+            fig_ss.update_traces(textinfo="label+percent", sort=False)
+            tema_ss = _tema_grafico()
+            fig_ss.update_layout(paper_bgcolor=tema_ss["sfondo"],
+                                 font_color=tema_ss["testo"], template=tema_ss["template"])
+            st.plotly_chart(fig_ss)
+        st.caption(T["ss_note"])
+
     # DataFrame delle frequenze con colonne nella lingua scelta.
     cc, cn, cq, cp = T["col_code"], T["col_name"], T["col_count"], T["col_pct"]
     conteggi = {chiave(k): v for k, v in r.conteggi.items()}
@@ -1184,3 +1278,56 @@ if testo:
                        file_name=f"{T['report_prefix']}{nome_file}.html", mime="text/html")
 
     st.caption(T["caption_pi"])
+
+    # --- Confronto con una seconda proteina ---
+    with st.expander(T["compare_header"]):
+        st.text_area(T["compare_label"], key="seq_b_input",
+                     placeholder=T["compare_ph"], height=110)
+        if st.button(T["btn_compare"]):
+            st.session_state.compare_seq = st.session_state.get("seq_b_input", "")
+        seq_b = st.session_state.get("compare_seq", "")
+        if seq_b:
+            meta_b = parse_fasta_header(seq_b, lang)
+            pulita_b, _ = valida(seq_b)
+            if not pulita_b:
+                st.error(T["compare_err"])
+            else:
+                rb = seq_core.analizza(pulita_b)
+                nome_a = ((meta.get("proteina") or meta.get("accession")) if meta else None) or T["compare_a"]
+                nome_b = ((meta_b.get("proteina") or meta_b.get("accession")) if meta_b else None) or T["compare_b"]
+                nome_a, nome_b = str(nome_a)[:28], str(nome_b)[:28]
+                ssa = (r.ss_helix + r.ss_sheet + r.ss_coil) or 1
+                ssb = (rb.ss_helix + rb.ss_sheet + rb.ss_coil) or 1
+                righe = [
+                    (T["m_length"], f"{r.lunghezza}", f"{rb.lunghezza}"),
+                    (T["m_mw"], f"{r.peso_molecolare/1000:.1f} kDa", f"{rb.peso_molecolare/1000:.1f} kDa"),
+                    (T["m_pi"], f"{r.punto_isoelettrico:.2f}", f"{rb.punto_isoelettrico:.2f}"),
+                    (T["m_charge"], f"{r.carica_a_pH7:+.1f}", f"{rb.carica_a_pH7:+.1f}"),
+                    (T["m_gravy"], f"{r.gravy:+.3f}", f"{rb.gravy:+.3f}"),
+                    (T["m_aliphatic"], f"{r.indice_alifatico:.1f}", f"{rb.indice_alifatico:.1f}"),
+                    (T["m_disulfide"], f"{r.ponti_disolfuro_max}", f"{rb.ponti_disolfuro_max}"),
+                    (T["ss_helix"], f"{100*r.ss_helix/ssa:.0f}%", f"{100*rb.ss_helix/ssb:.0f}%"),
+                    (T["ss_sheet"], f"{100*r.ss_sheet/ssa:.0f}%", f"{100*rb.ss_sheet/ssb:.0f}%"),
+                ]
+                df_cmp = pd.DataFrame(righe, columns=[T["compare_metric"], nome_a, nome_b])
+                st.dataframe(df_cmp, hide_index=True)
+
+                # composizione in classi a confronto (% dei residui)
+                ca = {chiave(k): v for k, v in r.classi.items()}
+                cb = {chiave(k): v for k, v in rb.classi.items()}
+                ta = sum(ca.values()) or 1
+                tb = sum(cb.values()) or 1
+                rows = []
+                for k in CLASSI_LABEL:
+                    lab = CLASSI_LABEL[k].get(lang, k)
+                    rows.append({"c": lab, "s": nome_a, "p": 100 * ca.get(k, 0) / ta})
+                    rows.append({"c": lab, "s": nome_b, "p": 100 * cb.get(k, 0) / tb})
+                fig_cmp = px.bar(pd.DataFrame(rows), x="c", y="p", color="s", barmode="group",
+                                 title=T["compare_chart_title"],
+                                 labels={"p": T["compare_y"], "c": "", "s": ""},
+                                 color_discrete_sequence=["#4e79a7", "#f28e2b"])
+                tema_c = _tema_grafico()
+                fig_cmp.update_layout(paper_bgcolor=tema_c["sfondo"], plot_bgcolor=tema_c["sfondo"],
+                                      font_color=tema_c["testo"], template=tema_c["template"],
+                                      legend_title_text="")
+                st.plotly_chart(fig_cmp)
