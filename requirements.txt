@@ -1,5 +1,6 @@
 streamlit>=1.40
 plotly>=5.20
+kaleido>=0.2
 pandas>=2.0
 pybind11>=2.12
 setuptools>=68
