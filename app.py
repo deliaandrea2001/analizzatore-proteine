@@ -13,13 +13,17 @@
 import os
 import re
 import json
+import html
 import sys
 import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 def _carica_core():
@@ -104,12 +108,45 @@ VERDETTO_LABEL = {
          "fr": "Protéine membranaire (multi-pass)", "zh": "膜蛋白（多次跨膜）"},
 }
 
-# Colori delle classi (chiave = nome canonico). Servono al JS per attenuare le fette.
+# Idrofobicità di Kyte-Doolittle per residuo (KD): negativa = idrofilico,
+# positiva = idrofobico. Usata per colorare le barre della composizione in modo
+# coerente con l'analisi dei domini di membrana (anch'essa basata su Kyte-Doolittle).
+HYDRO_KD = {
+    'I': 4.5, 'V': 4.2, 'L': 3.8, 'F': 2.8, 'C': 2.5, 'M': 1.9, 'A': 1.8,
+    'G': -0.4, 'T': -0.7, 'S': -0.8, 'W': -0.9, 'Y': -1.3, 'P': -1.6,
+    'H': -3.2, 'E': -3.5, 'Q': -3.5, 'D': -3.5, 'N': -3.5, 'K': -3.9, 'R': -4.5,
+}
+# Scala di colori divergente dell'idrofobicità: teal (idrofilico) → sabbia
+# (neutro) → arancio (idrofobico). Gli estremi coincidono coi colori delle classi
+# "Polari" e "Idrofobici", così barre e torta condividono la stessa palette.
+HYDRO_SCALE = [[0.0, "#3aa6a0"], [0.5, "#ece6d6"], [1.0, "#e07a3f"]]
+
+# Scale per-residuo per il profilo del grafico (la finestra le media). La scala
+# Kyte-Doolittle è anche quella usata dal core C++ per il rilevamento dei domini
+# TM. 'verso': +1 = valori alti idrofobici, -1 = valori alti idrofilici.
+HOPP_WOODS = {                            # Hopp & Woods (1981): alti = idrofilico
+    'R': 3.0, 'D': 3.0, 'E': 3.0, 'K': 3.0, 'S': 0.3, 'N': 0.2, 'Q': 0.2,
+    'G': 0.0, 'P': 0.0, 'T': -0.4, 'A': -0.5, 'H': -0.5, 'C': -1.0, 'M': -1.3,
+    'V': -1.5, 'I': -1.8, 'L': -1.8, 'Y': -2.3, 'F': -2.5, 'W': -3.4,
+}
+EISENBERG = {                             # Eisenberg (1984), consenso normalizzato
+    'I': 1.38, 'F': 1.19, 'V': 1.08, 'L': 1.06, 'W': 0.81, 'M': 0.64, 'A': 0.62,
+    'G': 0.48, 'C': 0.29, 'Y': 0.26, 'P': 0.12, 'T': -0.05, 'S': -0.18, 'H': -0.40,
+    'E': -0.74, 'N': -0.78, 'Q': -0.85, 'D': -0.90, 'K': -1.50, 'R': -2.53,
+}
+SCALE_IDRO = {                            # chiave -> (nome, tabella, è_idrofobicità)
+    "kd": ("Kyte-Doolittle", HYDRO_KD, True),
+    "hopp": ("Hopp-Woods", HOPP_WOODS, False),
+    "eisenberg": ("Eisenberg", EISENBERG, True),
+}
+
+# Colori delle classi (chiave = nome canonico), armonizzati con HYDRO_SCALE.
+# Servono anche al JS per attenuare le fette della torta.
 COLORI_CLASSI = {
-    "Idrofobici": "#9ecae1",        # azzurro chiaro
-    "Polari": "#2b6cb0",            # blu
-    "Carichi positivi": "#fcae91",  # rosa/salmone
-    "Carichi negativi": "#ef3b2c",  # rosso
+    "Idrofobici": "#e07a3f",        # arancio  (estremo idrofobico della scala)
+    "Polari": "#3aa6a0",            # teal     (estremo idrofilico della scala)
+    "Carichi positivi": "#3b7dd8",  # blu
+    "Carichi negativi": "#d1495b",  # rosso
 }
 
 # ===================== TRADUZIONI INTERFACCIA =====================
@@ -132,6 +169,7 @@ TESTI = {
                            "provenance can't be determined. Paste a FASTA (with the `>` line) "
                            "to see protein and organism."),
         "res_header": "📊 Results",
+        "sidebar_title": "Key data",
         "m_length": "Length", "m_mw": "Molecular weight", "m_pi": "Isoelectric point",
         "m_charge": "Charge at pH 7", "m_bonds": "Peptide bonds", "m_disulfide": "Disulfide bonds",
         "unit_aa": "aa", "disulfide_val": "max {n}", "cys_delta": "{n} Cys",
@@ -170,7 +208,17 @@ TESTI = {
         "mem_header": "🧬 Membrane domains — Kyte-Doolittle hydrophobicity",
         "m_tm": "Transmembrane domains",
         "profile_title": "Hydrophobicity profile (window 19 aa)",
+        "struct3d_header": "🧬 3D structure (AlphaFold)",
+        "scale_label": "Scale", "window_label": "Window (aa)",
+        "scale_tm_note": "Transmembrane regions are detected with Kyte-Doolittle.",
+        "crosshl_hint": "💡 Hover the profile to light up the matching residues in 3D — and hover the 3D model to mark the position on the profile.",
+        "struct3d_spinner": "Loading 3D structure…",
+        "struct3d_plddt": "Colour = pLDDT confidence: blue = high, red = low.",
+        "struct3d_source": "Source: AlphaFold DB · {id}",
+        "struct3d_notfound": "No AlphaFold model available for {acc}.",
+        "struct3d_need_acc": "Load the protein via a UniProt accession (UniProt tab, or a FASTA with a UniProt header) to see its 3D structure.",
         "ax_pos": "position (residue)", "ax_hydro": "average hydrophobicity",
+        "hydro_legend": "Hydrophobicity (KD)",
         "tm_threshold": "TM threshold (1.6)",
         "exp_tm_detail": "🔍 Hydrophobic regions detail and sequence map",
         "tm_seg": "Segment", "tm_res": "Residues", "tm_len": "Length",
@@ -180,6 +228,11 @@ TESTI = {
                        "= transmembrane residues &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>green</span> = hydrophilic residues (water-exposed)"),
         "btn_report": "⬇️ Download report (HTML)", "report_prefix": "report_",
+        "exp_export_header": "🧩 Export charts (vector SVG / PDF)",
+        "exp_export_hint": "High-resolution vector files — ideal for a thesis or exam report.",
+        "exp_export_format": "Format", "exp_export_prepare": "Prepare files",
+        "exp_export_spinner": "Generating files…", "exp_export_ready": "Download:",
+        "exp_export_error": "Export failed. Is the 'kaleido' package installed?",
         "caption_pi": ("ℹ️ The isoelectric point is an approximate theoretical value: "
                        "it depends on the pKa set used."),
         # --- report HTML ---
@@ -205,6 +258,8 @@ TESTI = {
         "btn_fetch": "Fetch from UniProt",
         "fetch_error": "Could not fetch '{acc}' from UniProt. Check the accession.",
         "fetch_spinner": "Fetching from UniProt…",
+        "tab_paste": "📋 Paste sequence", "tab_file": "📁 Upload file",
+        "tab_uniprot": "🔎 Search UniProt",
         "titration_header": "📈 Titration curve (net charge vs pH)",
         "ax_ph": "pH", "ax_charge": "net charge", "titration_pi": "pI = {v}",
         "r_titration": "Titration curve (net charge vs pH)",
@@ -239,6 +294,7 @@ TESTI = {
                            "quindi non posso dirne la provenienza. Incolla un FASTA (con la riga `>`) "
                            "per vedere proteina e organismo."),
         "res_header": "📊 Risultati",
+        "sidebar_title": "Dati chiave",
         "m_length": "Lunghezza", "m_mw": "Peso molecolare", "m_pi": "Punto isoelettrico",
         "m_charge": "Carica a pH 7", "m_bonds": "Legami peptidici", "m_disulfide": "Ponti disolfuro",
         "unit_aa": "aa", "disulfide_val": "max {n}", "cys_delta": "{n} Cys",
@@ -277,7 +333,17 @@ TESTI = {
         "mem_header": "🧬 Domini di membrana — idrofobicità di Kyte-Doolittle",
         "m_tm": "Domini transmembrana",
         "profile_title": "Profilo di idrofobicità (finestra 19 aa)",
+        "struct3d_header": "🧬 Struttura 3D (AlphaFold)",
+        "scale_label": "Scala", "window_label": "Finestra (aa)",
+        "scale_tm_note": "Le regioni transmembrana sono rilevate con Kyte-Doolittle.",
+        "crosshl_hint": "💡 Passa il mouse sul profilo per illuminare i residui corrispondenti nel 3D — e viceversa, passa sul modello 3D per segnare la posizione sul profilo.",
+        "struct3d_spinner": "Caricamento struttura 3D…",
+        "struct3d_plddt": "Colore = confidenza pLDDT: blu = alta, rosso = bassa.",
+        "struct3d_source": "Fonte: AlphaFold DB · {id}",
+        "struct3d_notfound": "Nessun modello AlphaFold disponibile per {acc}.",
+        "struct3d_need_acc": "Carica la proteina tramite accession UniProt (tab UniProt, o un FASTA con intestazione UniProt) per vederne la struttura 3D.",
         "ax_pos": "posizione (residuo)", "ax_hydro": "idrofobicità media",
+        "hydro_legend": "Idrofobicità (KD)",
         "tm_threshold": "soglia TM (1.6)",
         "exp_tm_detail": "🔍 Dettaglio regioni idrofobiche e mappa della sequenza",
         "tm_seg": "Segmento", "tm_res": "Residui", "tm_len": "Lunghezza",
@@ -287,6 +353,11 @@ TESTI = {
                        "= residui transmembrana &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>verde</span> = residui idrofilici (esposti all'acqua)"),
         "btn_report": "⬇️ Scarica il report (HTML)", "report_prefix": "report_",
+        "exp_export_header": "🧩 Esporta grafici (vettoriale SVG / PDF)",
+        "exp_export_hint": "File vettoriali ad alta risoluzione — ideali per una tesi o una relazione d'esame.",
+        "exp_export_format": "Formato", "exp_export_prepare": "Prepara i file",
+        "exp_export_spinner": "Generazione dei file…", "exp_export_ready": "Scarica:",
+        "exp_export_error": "Esportazione non riuscita. Il pacchetto 'kaleido' è installato?",
         "caption_pi": ("ℹ️ Il punto isoelettrico è un valore teorico approssimato: "
                        "dipende dal set di pKa usato."),
         # --- report HTML ---
@@ -312,6 +383,8 @@ TESTI = {
         "btn_fetch": "Scarica da UniProt",
         "fetch_error": "Impossibile scaricare '{acc}' da UniProt. Controlla l'accession.",
         "fetch_spinner": "Scaricamento da UniProt…",
+        "tab_paste": "📋 Incolla sequenza", "tab_file": "📁 Carica file",
+        "tab_uniprot": "🔎 Cerca su UniProt",
         "titration_header": "📈 Curva di titolazione (carica netta vs pH)",
         "ax_ph": "pH", "ax_charge": "carica netta", "titration_pi": "pI = {v}",
         "r_titration": "Curva di titolazione (carica netta vs pH)",
@@ -346,6 +419,7 @@ TESTI = {
                            "procesar, por lo que no se puede determinar su procedencia. Pega un "
                            "FASTA (con la línea `>`) para ver la proteína y el organismo."),
         "res_header": "📊 Resultados",
+        "sidebar_title": "Datos clave",
         "m_length": "Longitud", "m_mw": "Peso molecular", "m_pi": "Punto isoeléctrico",
         "m_charge": "Carga a pH 7", "m_bonds": "Enlaces peptídicos", "m_disulfide": "Puentes disulfuro",
         "unit_aa": "aa", "disulfide_val": "máx {n}", "cys_delta": "{n} Cys",
@@ -384,7 +458,17 @@ TESTI = {
         "mem_header": "🧬 Dominios de membrana — hidrofobicidad de Kyte-Doolittle",
         "m_tm": "Dominios transmembrana",
         "profile_title": "Perfil de hidrofobicidad (ventana 19 aa)",
+        "struct3d_header": "🧬 Estructura 3D (AlphaFold)",
+        "scale_label": "Escala", "window_label": "Ventana (aa)",
+        "scale_tm_note": "Las regiones transmembrana se detectan con Kyte-Doolittle.",
+        "crosshl_hint": "💡 Pasa el ratón por el perfil para iluminar los residuos correspondientes en 3D — y al revés, pasa por el modelo 3D para marcar la posición en el perfil.",
+        "struct3d_spinner": "Cargando estructura 3D…",
+        "struct3d_plddt": "Color = confianza pLDDT: azul = alta, rojo = baja.",
+        "struct3d_source": "Fuente: AlphaFold DB · {id}",
+        "struct3d_notfound": "No hay modelo AlphaFold disponible para {acc}.",
+        "struct3d_need_acc": "Carga la proteína mediante un accession de UniProt (pestaña UniProt, o un FASTA con encabezado UniProt) para ver su estructura 3D.",
         "ax_pos": "posición (residuo)", "ax_hydro": "hidrofobicidad media",
+        "hydro_legend": "Hidrofobicidad (KD)",
         "tm_threshold": "umbral TM (1.6)",
         "exp_tm_detail": "🔍 Detalle de regiones hidrofóbicas y mapa de la secuencia",
         "tm_seg": "Segmento", "tm_res": "Residuos", "tm_len": "Longitud",
@@ -394,6 +478,11 @@ TESTI = {
                        "= residuos transmembrana &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>verde</span> = residuos hidrofílicos (expuestos al agua)"),
         "btn_report": "⬇️ Descargar el informe (HTML)", "report_prefix": "informe_",
+        "exp_export_header": "🧩 Exportar gráficos (vectorial SVG / PDF)",
+        "exp_export_hint": "Archivos vectoriales de alta resolución — ideales para una tesis o un informe.",
+        "exp_export_format": "Formato", "exp_export_prepare": "Preparar archivos",
+        "exp_export_spinner": "Generando archivos…", "exp_export_ready": "Descargar:",
+        "exp_export_error": "Error de exportación. ¿Está instalado el paquete 'kaleido'?",
         "caption_pi": ("ℹ️ El punto isoeléctrico es un valor teórico aproximado: "
                        "depende del conjunto de pKa utilizado."),
         "r_title": "🧬 Informe de análisis proteico",
@@ -418,6 +507,8 @@ TESTI = {
         "btn_fetch": "Descargar de UniProt",
         "fetch_error": "No se pudo descargar '{acc}' de UniProt. Comprueba el accession.",
         "fetch_spinner": "Descargando de UniProt…",
+        "tab_paste": "📋 Pegar secuencia", "tab_file": "📁 Subir archivo",
+        "tab_uniprot": "🔎 Buscar en UniProt",
         "titration_header": "📈 Curva de titulación (carga neta vs pH)",
         "ax_ph": "pH", "ax_charge": "carga neta", "titration_pi": "pI = {v}",
         "r_titration": "Curva de titulación (carga neta vs pH)",
@@ -452,6 +543,7 @@ TESTI = {
                            "die Herkunft nicht bestimmt werden. Füge ein FASTA (mit der `>`-Zeile) "
                            "ein, um Protein und Organismus zu sehen."),
         "res_header": "📊 Ergebnisse",
+        "sidebar_title": "Kerndaten",
         "m_length": "Länge", "m_mw": "Molekulargewicht", "m_pi": "Isoelektrischer Punkt",
         "m_charge": "Ladung bei pH 7", "m_bonds": "Peptidbindungen", "m_disulfide": "Disulfidbrücken",
         "unit_aa": "AS", "disulfide_val": "max {n}", "cys_delta": "{n} Cys",
@@ -490,7 +582,17 @@ TESTI = {
         "mem_header": "🧬 Membrandomänen — Kyte-Doolittle-Hydrophobizität",
         "m_tm": "Transmembrandomänen",
         "profile_title": "Hydrophobizitätsprofil (Fenster 19 AS)",
+        "struct3d_header": "🧬 3D-Struktur (AlphaFold)",
+        "scale_label": "Skala", "window_label": "Fenster (AS)",
+        "scale_tm_note": "Transmembranregionen werden mit Kyte-Doolittle erkannt.",
+        "crosshl_hint": "💡 Fahre über das Profil, um die passenden Reste in 3D hervorzuheben — und über das 3D-Modell, um die Position im Profil zu markieren.",
+        "struct3d_spinner": "3D-Struktur wird geladen…",
+        "struct3d_plddt": "Farbe = pLDDT-Konfidenz: blau = hoch, rot = niedrig.",
+        "struct3d_source": "Quelle: AlphaFold DB · {id}",
+        "struct3d_notfound": "Kein AlphaFold-Modell für {acc} verfügbar.",
+        "struct3d_need_acc": "Lade das Protein über eine UniProt-Accession (UniProt-Tab oder FASTA mit UniProt-Header), um die 3D-Struktur zu sehen.",
         "ax_pos": "Position (Rest)", "ax_hydro": "mittlere Hydrophobizität",
+        "hydro_legend": "Hydrophobizität (KD)",
         "tm_threshold": "TM-Schwelle (1.6)",
         "exp_tm_detail": "🔍 Details zu hydrophoben Regionen und Sequenzkarte",
         "tm_seg": "Segment", "tm_res": "Reste", "tm_len": "Länge",
@@ -500,6 +602,11 @@ TESTI = {
                        "= Transmembranreste &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>grün</span> = hydrophile Reste (wasserexponiert)"),
         "btn_report": "⬇️ Bericht herunterladen (HTML)", "report_prefix": "bericht_",
+        "exp_export_header": "🧩 Diagramme exportieren (vektor SVG / PDF)",
+        "exp_export_hint": "Hochauflösende Vektordateien — ideal für Abschlussarbeit oder Bericht.",
+        "exp_export_format": "Format", "exp_export_prepare": "Dateien vorbereiten",
+        "exp_export_spinner": "Dateien werden erzeugt…", "exp_export_ready": "Herunterladen:",
+        "exp_export_error": "Export fehlgeschlagen. Ist das Paket 'kaleido' installiert?",
         "caption_pi": ("ℹ️ Der isoelektrische Punkt ist ein ungefährer theoretischer Wert: "
                        "er hängt vom verwendeten pKa-Satz ab."),
         "r_title": "🧬 Proteinanalyse-Bericht",
@@ -524,6 +631,8 @@ TESTI = {
         "btn_fetch": "Von UniProt laden",
         "fetch_error": "'{acc}' konnte nicht von UniProt geladen werden. Prüfe die Accession.",
         "fetch_spinner": "Lade von UniProt…",
+        "tab_paste": "📋 Sequenz einfügen", "tab_file": "📁 Datei hochladen",
+        "tab_uniprot": "🔎 UniProt durchsuchen",
         "titration_header": "📈 Titrationskurve (Nettoladung vs. pH)",
         "ax_ph": "pH", "ax_charge": "Nettoladung", "titration_pi": "pI = {v}",
         "r_titration": "Titrationskurve (Nettoladung vs. pH)",
@@ -558,6 +667,7 @@ TESTI = {
                            "provenance ne peut donc pas être déterminée. Collez un FASTA (avec la "
                            "ligne `>`) pour voir la protéine et l'organisme."),
         "res_header": "📊 Résultats",
+        "sidebar_title": "Données clés",
         "m_length": "Longueur", "m_mw": "Poids moléculaire", "m_pi": "Point isoélectrique",
         "m_charge": "Charge à pH 7", "m_bonds": "Liaisons peptidiques", "m_disulfide": "Ponts disulfure",
         "unit_aa": "aa", "disulfide_val": "max {n}", "cys_delta": "{n} Cys",
@@ -596,7 +706,17 @@ TESTI = {
         "mem_header": "🧬 Domaines membranaires — hydrophobicité de Kyte-Doolittle",
         "m_tm": "Domaines transmembranaires",
         "profile_title": "Profil d'hydrophobicité (fenêtre 19 aa)",
+        "struct3d_header": "🧬 Structure 3D (AlphaFold)",
+        "scale_label": "Échelle", "window_label": "Fenêtre (aa)",
+        "scale_tm_note": "Les régions transmembranaires sont détectées avec Kyte-Doolittle.",
+        "crosshl_hint": "💡 Survolez le profil pour illuminer les résidus correspondants en 3D — et survolez le modèle 3D pour marquer la position sur le profil.",
+        "struct3d_spinner": "Chargement de la structure 3D…",
+        "struct3d_plddt": "Couleur = confiance pLDDT : bleu = élevée, rouge = faible.",
+        "struct3d_source": "Source : AlphaFold DB · {id}",
+        "struct3d_notfound": "Aucun modèle AlphaFold disponible pour {acc}.",
+        "struct3d_need_acc": "Chargez la protéine via une accession UniProt (onglet UniProt, ou un FASTA avec en-tête UniProt) pour voir sa structure 3D.",
         "ax_pos": "position (résidu)", "ax_hydro": "hydrophobicité moyenne",
+        "hydro_legend": "Hydrophobicité (KD)",
         "tm_threshold": "seuil TM (1.6)",
         "exp_tm_detail": "🔍 Détail des régions hydrophobes et carte de la séquence",
         "tm_seg": "Segment", "tm_res": "Résidus", "tm_len": "Longueur",
@@ -606,6 +726,11 @@ TESTI = {
                        "= résidus transmembranaires &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>vert</span> = résidus hydrophiles (exposés à l'eau)"),
         "btn_report": "⬇️ Télécharger le rapport (HTML)", "report_prefix": "rapport_",
+        "exp_export_header": "🧩 Exporter les graphiques (vectoriel SVG / PDF)",
+        "exp_export_hint": "Fichiers vectoriels haute résolution — idéaux pour un mémoire ou un rapport.",
+        "exp_export_format": "Format", "exp_export_prepare": "Préparer les fichiers",
+        "exp_export_spinner": "Génération des fichiers…", "exp_export_ready": "Télécharger :",
+        "exp_export_error": "Échec de l'export. Le paquet « kaleido » est-il installé ?",
         "caption_pi": ("ℹ️ Le point isoélectrique est une valeur théorique approximative : "
                        "elle dépend du jeu de pKa utilisé."),
         "r_title": "🧬 Rapport d'analyse protéique",
@@ -630,6 +755,8 @@ TESTI = {
         "btn_fetch": "Récupérer depuis UniProt",
         "fetch_error": "Impossible de récupérer '{acc}' depuis UniProt. Vérifiez l'accession.",
         "fetch_spinner": "Récupération depuis UniProt…",
+        "tab_paste": "📋 Coller la séquence", "tab_file": "📁 Téléverser un fichier",
+        "tab_uniprot": "🔎 Rechercher sur UniProt",
         "titration_header": "📈 Courbe de titration (charge nette vs pH)",
         "ax_ph": "pH", "ax_charge": "charge nette", "titration_pi": "pI = {v}",
         "r_titration": "Courbe de titration (charge nette vs pH)",
@@ -663,6 +790,7 @@ TESTI = {
         "info_no_header": ("ℹ️ 未识别到 FASTA 头部：这是一条原始序列，因此无法确定其来源。"
                            "请粘贴 FASTA（含 `>` 行）以查看蛋白质和物种。"),
         "res_header": "📊 结果",
+        "sidebar_title": "关键数据",
         "m_length": "长度", "m_mw": "分子量", "m_pi": "等电点",
         "m_charge": "pH 7 时的电荷", "m_bonds": "肽键", "m_disulfide": "二硫键",
         "unit_aa": "aa", "disulfide_val": "最多 {n}", "cys_delta": "{n} 个 Cys",
@@ -698,7 +826,17 @@ TESTI = {
         "mem_header": "🧬 膜结构域 — Kyte-Doolittle 疏水性",
         "m_tm": "跨膜结构域",
         "profile_title": "疏水性分布（窗口 19 aa）",
+        "struct3d_header": "🧬 三维结构 (AlphaFold)",
+        "scale_label": "标度", "window_label": "窗口 (aa)",
+        "scale_tm_note": "跨膜区域使用 Kyte-Doolittle 检测。",
+        "crosshl_hint": "💡 将鼠标悬停在曲线上可在 3D 中高亮对应残基；悬停在 3D 模型上可在曲线上标记对应位置。",
+        "struct3d_spinner": "正在加载三维结构…",
+        "struct3d_plddt": "颜色 = pLDDT 置信度：蓝色=高，红色=低。",
+        "struct3d_source": "来源：AlphaFold DB · {id}",
+        "struct3d_notfound": "未找到 {acc} 的 AlphaFold 模型。",
+        "struct3d_need_acc": "通过 UniProt 登录号加载蛋白质（UniProt 标签页，或带 UniProt 头的 FASTA）以查看其三维结构。",
         "ax_pos": "位置（残基）", "ax_hydro": "平均疏水性",
+        "hydro_legend": "疏水性 (KD)",
         "tm_threshold": "TM 阈值 (1.6)",
         "exp_tm_detail": "🔍 疏水区域详情与序列图",
         "tm_seg": "片段", "tm_res": "残基", "tm_len": "长度",
@@ -708,6 +846,11 @@ TESTI = {
                        "= 跨膜残基 &nbsp;&nbsp; "
                        "<span style='color:#2f855a'>绿色</span> = 亲水残基（暴露于水）"),
         "btn_report": "⬇️ 下载报告 (HTML)", "report_prefix": "report_",
+        "exp_export_header": "🧩 导出图表（矢量 SVG / PDF）",
+        "exp_export_hint": "高分辨率矢量文件 —— 适合论文或考试报告。",
+        "exp_export_format": "格式", "exp_export_prepare": "准备文件",
+        "exp_export_spinner": "正在生成文件…", "exp_export_ready": "下载：",
+        "exp_export_error": "导出失败。是否已安装 'kaleido' 包？",
         "caption_pi": "ℹ️ 等电点是一个近似的理论值：取决于所用的 pKa 集合。",
         "r_title": "🧬 蛋白质分析报告",
         "r_provenance": "来源", "r_metrics": "指标",
@@ -730,6 +873,8 @@ TESTI = {
         "btn_fetch": "从 UniProt 获取",
         "fetch_error": "无法从 UniProt 获取 '{acc}'。请检查登录号。",
         "fetch_spinner": "正在从 UniProt 获取…",
+        "tab_paste": "📋 粘贴序列", "tab_file": "📁 上传文件",
+        "tab_uniprot": "🔎 搜索 UniProt",
         "titration_header": "📈 滴定曲线（净电荷 vs pH）",
         "ax_ph": "pH", "ax_charge": "净电荷", "titration_pi": "pI = {v}",
         "r_titration": "滴定曲线（净电荷 vs pH）",
@@ -824,16 +969,220 @@ def carica_esempio():
 
 
 def fetch_uniprot(acc: str):
-    """Scarica il FASTA di un accession da UniProt. None se fallisce."""
+    """Scarica il FASTA di un accession da UniProt. Gestisce anche gli accession
+    secondari/obsoleti (es. P62158 → P0DP23 Calmodulina): il .fasta diretto in quei
+    casi risponde 200 ma vuoto, quindi si ricade sull'API di ricerca (sec_acc).
+    Risolvendo all'entry corrente si sistema anche il viewer 3D (l'header avrà
+    l'accession primario). None se fallisce del tutto."""
     acc = acc.strip()
-    url = f"https://rest.uniprot.org/uniprotkb/{acc}.fasta"
-    try:
+
+    def _get(url):
         req = urllib.request.Request(url, headers={"User-Agent": "analizzatore-proteine"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            testo = resp.read().decode("utf-8", "ignore")
+            return resp.read().decode("utf-8", "ignore")
+
+    try:
+        # 1) accession diretto
+        testo = _get(f"https://rest.uniprot.org/uniprotkb/{acc}.fasta")
+        if testo.lstrip().startswith(">"):
+            return testo
+        # 2) accession secondario/obsoleto → risolvi all'entry corrente
+        q = urllib.parse.quote(f"sec_acc:{acc}")
+        testo = _get("https://rest.uniprot.org/uniprotkb/search"
+                     f"?query={q}&format=fasta&size=1")
         return testo if testo.lstrip().startswith(">") else None
     except Exception:
         return None
+
+
+# UA simil-browser: l'API di AlphaFold rifiuta (403) gli User-Agent generici.
+_UA_BROWSER = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36")
+
+
+@st.cache_data(show_spinner=False)
+def fetch_alphafold(acc: str):
+    """Scarica il modello predetto da AlphaFold DB per un accession UniProt.
+    Ritorna {'pdb', 'id'} oppure None (nessun modello / rete non disponibile).
+    In cache: lo stesso accession non viene riscaricato a ogni rerun."""
+    acc = (acc or "").strip()
+    if not acc:
+        return None
+
+    def _get(url, timeout):
+        req = urllib.request.Request(url, headers={"User-Agent": _UA_BROWSER})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", "ignore")
+
+    try:
+        meta = json.loads(_get(f"https://alphafold.ebi.ac.uk/api/prediction/{acc}", 20))
+        if not meta:
+            return None
+        entry = meta[0]
+        pdb_url = entry.get("pdbUrl")
+        if not pdb_url:
+            return None
+        pdb = _get(pdb_url, 30)
+        if "ATOM" not in pdb:
+            return None
+        return {"pdb": pdb, "id": entry.get("entryId", "")}
+    except Exception:
+        return None
+
+
+def visualizzatore_3d(pdb_text, altezza=360):
+    """Mostra una struttura PDB con 3Dmol.js in un widget interattivo (rotazione,
+    zoom). Catena 'cartoon' colorata per pLDDT (B-factor): blu = confidenza alta,
+    rosso = bassa. La struttura è iniettata come testo (niente fetch dal browser,
+    quindi nessun problema di CORS). Sfondo trasparente: si adatta al tema."""
+    html_v = """
+<div id="vwrap" style="width:100%%;height:%dpx;position:relative;"></div>
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<script>
+(function(){
+  function start(){
+    if(typeof $3Dmol === 'undefined'){ return setTimeout(start, 80); }
+    const el = document.getElementById('vwrap');
+    const v = $3Dmol.createViewer(el, {backgroundAlpha: 0});
+    v.addModel(%s, 'pdb');
+    v.setStyle({}, {cartoon: {colorscheme: {prop:'b', gradient:'roygb', min:50, max:90}}});
+    v.zoomTo();
+    v.render();
+    window.addEventListener('resize', function(){ v.resize(); });
+  }
+  start();
+})();
+</script>
+""" % (altezza, json.dumps(pdb_text))
+    components.html(html_v, height=altezza + 12)
+
+
+_CROSS_TEMPLATE = """
+<div id="cwrap" style="display:flex;gap:10px;width:100%;height:__ALT__px;
+ font-family:-apple-system,'Segoe UI',sans-serif;">
+  <div id="cplot" style="flex:3;min-width:0;height:100%;"></div>
+  <div id="cmol" style="flex:2;min-width:0;height:100%;position:relative;">
+    <div style="position:absolute;top:6px;left:0;right:0;text-align:center;
+     font-size:13px;font-weight:600;opacity:.75;pointer-events:none;z-index:5;
+     color:__FONTC__;">__TITOLO3D__</div>
+  </div>
+</div>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+<script>
+(function(){
+  const D = __PAYLOAD__;
+  const HL = '#ffd400';                       // colore di evidenziazione condiviso
+  function baseShapes(){
+    const sh = [];
+    if(D.soglia !== null){
+      sh.push({type:'line',xref:'paper',x0:0,x1:1,y0:D.soglia,y1:D.soglia,
+               line:{color:'#c0504d',dash:'dash',width:1.5}});
+    } else {
+      sh.push({type:'line',xref:'paper',x0:0,x1:1,y0:0,y1:0,
+               line:{color:'#888',dash:'dot',width:1}});
+    }
+    D.seg.forEach(function(s){
+      sh.push({type:'rect',xref:'x',yref:'paper',x0:s[0],x1:s[1],y0:0,y1:1,
+               fillcolor:'#2b6cb0',opacity:0.18,line:{width:0},layer:'below'});
+    });
+    return sh;
+  }
+  const fontc = D.scuro ? '#fafafa' : '#262730';
+  const layout = {title:{text:D.titolo,font:{size:14}},margin:{t:42,b:44,l:56,r:12},
+    xaxis:{title:D.asseX,zeroline:false},yaxis:{title:D.asseY,zeroline:false},
+    shapes:baseShapes(),paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
+    font:{color:fontc},hovermode:'x',showlegend:false};
+  const trace = {x:D.x,y:D.y,type:'scatter',mode:'lines',line:{color:D.linea,width:2},
+    hovertemplate:'%{x}<br>%{y:.2f}<extra></extra>'};
+
+  let viewer=null, baseStyle=null;
+  function set3D(lo,hi){
+    if(!viewer) return;
+    viewer.setStyle({}, baseStyle);
+    if(lo!=null){
+      const arr=[]; for(let r=lo;r<=hi;r++) arr.push(r);
+      viewer.setStyle({resi:arr},{cartoon:{color:HL},stick:{color:HL,radius:0.25}});
+    }
+    viewer.render();
+  }
+  function markPlot(resi){
+    const sh = baseShapes();
+    if(resi!=null){
+      sh.push({type:'line',xref:'x',yref:'paper',x0:resi,x1:resi,y0:0,y1:1,
+               line:{color:HL,width:2}});
+    }
+    Plotly.relayout('cplot',{shapes:sh});
+  }
+
+  Plotly.newPlot('cplot',[trace],layout,{displayModeBar:false,responsive:true})
+   .then(function(){
+    const gd = document.getElementById('cplot');
+    gd.on('plotly_hover',function(ev){
+      const x = Math.round(ev.points[0].x);
+      let lo=x, hi=x;                          // se dentro un TM, evidenzio tutto il dominio
+      for(const s of D.seg){ if(x>=s[0] && x<=s[1]){ lo=s[0]; hi=s[1]; break; } }
+      set3D(lo,hi);
+    });
+    gd.on('plotly_unhover',function(){ set3D(null,null); });
+  });
+
+  function startMol(){
+    if(typeof $3Dmol==='undefined' || typeof Plotly==='undefined'){ return setTimeout(startMol,80); }
+    viewer = $3Dmol.createViewer(document.getElementById('cmol'),{backgroundAlpha:0});
+    viewer.addModel(D.pdb,'pdb');
+    baseStyle = {cartoon:{colorscheme:{prop:'b',gradient:'roygb',min:50,max:90}}};
+    viewer.setStyle({}, baseStyle);
+    viewer.zoomTo();
+    viewer.render();
+    viewer.setHoverable({}, true,
+      function(atom){ if(atom){ markPlot(atom.resi);
+        viewer.setStyle({}, baseStyle);
+        viewer.setStyle({resi:[atom.resi]},{cartoon:{color:HL},stick:{color:HL,radius:0.25}});
+        viewer.render(); } },
+      function(){ markPlot(null); set3D(null,null); });
+    viewer.render();
+    window.addEventListener('resize', function(){ viewer.resize(); });
+  }
+  startMol();
+})();
+</script>
+"""
+
+
+def visualizzatore_combinato(pos, sco, segmenti, pdb_text, *, asse_x, asse_y,
+                             titolo, titolo_3d, soglia, linea, scuro, altezza=400):
+    """Profilo 2D (Plotly.js) + struttura 3D (3Dmol.js) nello STESSO iframe, con
+    cross-highlighting: passando sul grafico si illuminano i residui corrispondenti
+    sul modello 3D (e i domini TM per intero), e viceversa il passaggio sul 3D
+    segna la posizione sul grafico. Stare nello stesso frame evita la fragile
+    comunicazione cross-iframe."""
+    data = {
+        "x": list(pos), "y": [round(v, 4) for v in sco],
+        "seg": [[int(s.inizio), int(s.fine)] for s in segmenti],
+        "asseX": asse_x, "asseY": asse_y, "titolo": titolo,
+        "soglia": soglia, "linea": linea, "scuro": bool(scuro), "pdb": pdb_text,
+    }
+    html_w = (_CROSS_TEMPLATE.replace("__ALT__", str(altezza))
+              .replace("__FONTC__", "#fafafa" if scuro else "#262730")
+              .replace("__TITOLO3D__", html.escape(str(titolo_3d)))
+              .replace("__PAYLOAD__", json.dumps(data)))
+    components.html(html_w, height=altezza + 16)
+
+
+def profilo_finestra(seq, tabella, finestra):
+    """Profilo a media mobile di una scala per-residuo, con lo stesso allineamento
+    del core C++ (finestra a sinistra [i, i+w-1], valore al residuo centrale,
+    1-based). Così la curva combacia col rilevamento TM. Ritorna (pos, punteggi)."""
+    N = len(seq)
+    pos, sco = [], []
+    if N < finestra:
+        return pos, sco
+    for i in range(0, N - finestra + 1):
+        s = sum(tabella.get(seq[k], 0.0) for k in range(i, i + finestra))
+        sco.append(s / finestra)
+        pos.append(i + finestra // 2 + 1)
+    return pos, sco
 
 
 def heatmap_sequenza(seq, segmenti):
@@ -855,6 +1204,14 @@ def heatmap_sequenza(seq, segmenti):
 
 def costruisci_report_html(meta, r, prof, fig_bar, fig_pie, fig_idro, fig_tit, heatmap, T, lang):
     """Report HTML autonomo con i grafici Plotly interattivi (per il download)."""
+    # Il report ha sfondo bianco: i grafici vanno resi sempre in tema chiaro, a
+    # prescindere dal tema dell'app (in dark mode testo/linee chiari sparirebbero
+    # sul bianco). Riallineo qui tutte le figure prima di serializzarle.
+    for _f in (fig_bar, fig_pie, fig_idro, fig_tit):
+        _f.update_layout(template="plotly_white", paper_bgcolor="white",
+                         plot_bgcolor="white", font_color="#222")
+    fig_idro.update_traces(line_color="#1d2733")     # linea scura, leggibile sul bianco
+
     prov = ""
     if meta:
         voci = [(T["lbl_protein"], meta.get("proteina")),
@@ -915,11 +1272,18 @@ h1{{color:#3b7dd8}}</style>
 def _tema_grafico():
     """Colori coerenti col tema (chiaro/scuro) di Streamlit. Lo sfondo è
     sempre trasparente, così il grafico eredita lo sfondo dell'app."""
-    tipo = None
-    try:
-        tipo = st.context.theme.type        # Streamlit recenti: tema attivo reale
-    except Exception:
-        tipo = st.get_option("theme.base")  # fallback
+    # Un eventuale tema forzato in .streamlit/config.toml è quello realmente
+    # renderizzato: ha la precedenza. Senza config si segue il tema attivo nel
+    # frontend (menu "Settings" → Chiaro/Scuro/Sistema), riportato da st.context.
+    base = st.get_option("theme.base")
+    if base in ("light", "dark"):
+        tipo = base
+    else:
+        try:
+            tipo = st.context.theme.type
+        except Exception:
+            tipo = None
+        tipo = tipo or "light"
     scuro = (tipo == "dark")
     return {"sfondo": "rgba(0,0,0,0)",
             "testo": "#fafafa" if scuro else "#262730",
@@ -990,9 +1354,269 @@ def grafico_con_hover(fig, tipo, div_id, colori=None, height=430):
     st.iframe(page, height=height)
 
 
+def _fig_per_stampa(fig, line_scuro=False):
+    """Copia 'pronta per la stampa' di una figura Plotly: tema chiaro, sfondo
+    bianco e dimensioni fisse — adatta all'export vettoriale (SVG/PDF) da inserire
+    in una tesi o relazione. Non altera la figura mostrata a schermo."""
+    f = go.Figure(fig)
+    f.update_layout(template="plotly_white", paper_bgcolor="white",
+                    plot_bgcolor="white", font_color="#222",
+                    width=1000, height=520, margin=dict(t=60, b=60, l=70, r=40))
+    if line_scuro:                       # profilo idrofobicità: linea scura sul bianco
+        f.update_traces(line_color="#1d2733")
+    return f
+
+
+def griglia_metriche(cards, ncol=3):
+    """Rende un elenco di metriche come griglia di card 'dashboard':
+    bordo leggero, leggera ombreggiatura, icona colorata dedicata.
+    Ogni elemento di `cards` è un dict con chiavi:
+        icon  -> emoji/icona
+        color -> colore esadecimale dell'icona (#rrggbb)
+        label -> etichetta della metrica
+        value -> valore principale
+        sub   -> riga secondaria opzionale (unità / nota)
+    Il layout è responsivo: `ncol` colonne su desktop, 2 sotto i 760px, 1 su
+    mobile. I colori NON sono cotti in Python: il CSS ha varianti chiara e scura,
+    e il theme-watcher JS sceglie quale applicare mettendo la classe `app-dark`
+    su <html>. Così al cambio tema le card si aggiornano subito, senza rerun."""
+    css = (
+        "<style>"
+        ".mcards{display:grid;grid-template-columns:repeat(%d,minmax(0,1fr));"
+        "gap:14px;margin:.25rem 0 1.1rem;}"
+        ".mcards .mc{background:#ffffff;border:1px solid #e7eaf0;border-radius:14px;"
+        "padding:15px 17px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 2px 6px rgba(16,24,40,.06);"
+        "display:flex;align-items:flex-start;gap:13px;"
+        "transition:box-shadow .18s ease,transform .18s ease,background .18s ease,"
+        "border-color .18s ease;}"
+        ".mcards .mc:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(16,24,40,.12);}"
+        ".mcards .mc .ico{flex:0 0 auto;width:40px;height:40px;border-radius:11px;"
+        "display:flex;align-items:center;justify-content:center;font-size:20px;"
+        "line-height:1;}"
+        ".mcards .mc .bd{display:flex;flex-direction:column;gap:1px;min-width:0;}"
+        ".mcards .mc .lab{font-size:.72rem;font-weight:600;letter-spacing:.04em;"
+        "text-transform:uppercase;color:#667085;white-space:nowrap;overflow:hidden;"
+        "text-overflow:ellipsis;}"
+        ".mcards .mc .val{font-size:1.5rem;font-weight:700;line-height:1.2;color:#1f2430;}"
+        ".mcards .mc .sub{font-size:.78rem;color:#98a2b3;}"
+        # --- variante scura (classe 'app-dark' su <html>, messa dal watcher) ---
+        "html.app-dark .mcards .mc{background:#1b2230;border-color:rgba(255,255,255,0.10);"
+        "box-shadow:0 1px 3px rgba(0,0,0,.45);}"
+        "html.app-dark .mcards .mc:hover{box-shadow:0 6px 18px rgba(0,0,0,.55);}"
+        "html.app-dark .mcards .mc .lab{color:#9aa0a6;}"
+        "html.app-dark .mcards .mc .val{color:#fafafa;}"
+        "html.app-dark .mcards .mc .sub{color:#8a9099;}"
+        "@media(max-width:760px){.mcards{grid-template-columns:repeat(2,minmax(0,1fr));}}"
+        "@media(max-width:480px){.mcards{grid-template-columns:1fr;}}"
+        "</style>"
+    ) % ncol
+
+    items = []
+    for c in cards:
+        ico_bg = _hex_rgba(c["color"], 0.14)
+        sub = (f'<div class="sub">{html.escape(str(c["sub"]))}</div>'
+               if c.get("sub") else "")
+        items.append(
+            '<div class="mc">'
+            f'<div class="ico" style="background:{ico_bg};color:{c["color"]}">'
+            f'{c["icon"]}</div>'
+            '<div class="bd">'
+            f'<div class="lab">{html.escape(str(c["label"]))}</div>'
+            f'<div class="val">{html.escape(str(c["value"]))}</div>'
+            f'{sub}</div></div>'
+        )
+    st.markdown(css + '<div class="mcards">' + "".join(items) + "</div>",
+                unsafe_allow_html=True)
+
+
+# CSS statico del popover 'Dati chiave'. Colori in due varianti: chiara (default)
+# e scura (selettore 'html.app-dark', attivato dal theme-watcher JS). Così il
+# popover segue il tema in tempo reale, senza dover ricalcolare nulla in Python.
+_KP_CSS = """
+#keypanel-root .kp-trigger{position:fixed;left:14px;top:50%;
+ transform:translateY(-50%);width:48px;height:48px;border-radius:14px;display:flex;
+ align-items:center;justify-content:center;font-size:24px;cursor:pointer;
+ z-index:100000;background:#ffffff;border:1px solid #e7eaf0;
+ box-shadow:0 4px 16px rgba(0,0,0,.18);
+ transition:box-shadow .2s,transform .2s,background .2s,border-color .2s;}
+html.app-dark #keypanel-root .kp-trigger{background:#1b2230;
+ border-color:rgba(255,255,255,0.12);box-shadow:0 4px 16px rgba(0,0,0,.45);}
+#keypanel-root .kp-trigger:hover{transform:translateY(-50%) scale(1.05);
+ box-shadow:0 4px 16px rgba(0,0,0,.25),0 0 18px rgba(59,125,216,.55);}
+#keypanel-root .kp-panel{position:fixed;left:74px;top:50%;
+ transform-origin:left center;
+ transform:translateY(-50%) translateX(-14px) scale(.94);width:252px;z-index:100000;
+ background:rgba(255,255,255,0.97);backdrop-filter:blur(12px);
+ -webkit-backdrop-filter:blur(12px);border:1px solid #e7eaf0;border-radius:16px;
+ padding:14px 16px;box-shadow:0 12px 38px rgba(16,24,40,.18);opacity:0;visibility:hidden;
+ transition:opacity .3s ease,transform .3s cubic-bezier(.16,1,.3,1),
+ visibility 0s linear .3s,background .25s,border-color .25s;
+ font-family:-apple-system,'Segoe UI',sans-serif;}
+html.app-dark #keypanel-root .kp-panel{background:rgba(27,34,48,0.92);
+ border-color:rgba(255,255,255,0.12);box-shadow:0 12px 38px rgba(0,0,0,.45);}
+#keypanel-root .kp-panel.open{opacity:1;visibility:visible;
+ transform:translateY(-50%) translateX(0) scale(1);
+ transition:opacity .3s ease,transform .3s cubic-bezier(.16,1,.3,1),
+ visibility 0s,background .25s,border-color .25s;}
+#keypanel-root .kp-head{display:flex;align-items:center;justify-content:space-between;}
+#keypanel-root .kp-title{font-weight:700;font-size:.98rem;color:#1f2430;}
+html.app-dark #keypanel-root .kp-title{color:#fafafa;}
+#keypanel-root .kp-close{cursor:pointer;color:#667085;font-size:1.25rem;
+ line-height:1;opacity:.65;}#keypanel-root .kp-close:hover{opacity:1;}
+html.app-dark #keypanel-root .kp-close{color:#aab2bd;}
+#keypanel-root .kp-name{font-size:.82rem;font-weight:600;color:#1f2430;
+ opacity:.75;margin:2px 0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+html.app-dark #keypanel-root .kp-name{color:#fafafa;}
+#keypanel-root .kp-row{display:flex;align-items:center;gap:8px;padding:6px 0;
+ border-top:1px solid #e7eaf0;}
+html.app-dark #keypanel-root .kp-row{border-top-color:rgba(255,255,255,0.12);}
+#keypanel-root .kp-row:first-of-type{border-top:none;}
+#keypanel-root .kp-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
+#keypanel-root .kp-l{font-size:.78rem;color:#667085;flex:1;}
+html.app-dark #keypanel-root .kp-l{color:#aab2bd;}
+#keypanel-root .kp-v{font-size:.9rem;font-weight:700;color:#1f2430;}
+html.app-dark #keypanel-root .kp-v{color:#fafafa;}
+"""
+
+
+def prepara_layout_pannello():
+    """Nasconde la sidebar nativa di Streamlit (non più usata) e riserva un po'
+    di spazio a sinistra per l'icona-trigger del popover 'Dati chiave'."""
+    st.markdown(
+        "<style>"
+        "[data-testid='stSidebar'],[data-testid='stSidebarCollapseButton'],"
+        "[data-testid='stSidebarCollapsedControl'],[data-testid='collapsedControl']"
+        "{display:none!important;}"
+        "section[data-testid='stMain'] .block-container{padding-left:64px;}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
+
+
+def inietta_theme_watcher():
+    """Tiene i componenti custom (card, popover, icona) allineati al tema attivo
+    di Streamlit SENZA rerun né refresh. Il cambio tema dal menu è lato browser:
+    qui rilevo chiaro/scuro dal colore di sfondo dell'app e metto/tolgo la classe
+    'app-dark' su <html> — il CSS (varianti chiara/scura) fa il resto all'istante.
+    Un breve polling reagisce ai cambi di tema in tempo reale. Idempotente: il
+    flag su window evita di creare più intervalli a ogni rerun."""
+    components.html("""
+<script>
+const doc = window.parent.document;
+const win = doc.defaultView;
+if(!win.__themeWatcher){
+  win.__themeWatcher = true;
+  const root = doc.documentElement;
+  function bg(el){ return (getComputedStyle(el).backgroundColor || '').match(/[\\d.]+/g); }
+  function isDark(){
+    let m = null;
+    const cand = [doc.querySelector('[data-testid="stApp"]'), doc.body, root];
+    for(const el of cand){
+      if(!el) continue;
+      const c = bg(el);
+      if(c && (c.length < 4 || parseFloat(c[3]) > 0)){ m = c; break; }
+    }
+    if(!m) return false;
+    const lum = 0.2126*(+m[0]) + 0.7152*(+m[1]) + 0.0722*(+m[2]);
+    return lum < 128;
+  }
+  function apply(){ root.classList.toggle('app-dark', isDark()); }
+  apply();
+  win.setInterval(apply, 350);
+}
+</script>
+""", height=0)
+
+
+def inietta_invio_submit():
+    """Nella text_area della sequenza (dentro un st.form) fa sì che il semplice
+    Invio avvii l'analisi, mentre Shift+Invio inserisce un a-capo (utile per i
+    FASTA multiriga). Di default Streamlit richiederebbe Ctrl/⌘+Invio.
+
+    st.markdown non esegue JS: inietto un listener nel documento padre via
+    components.html (iframe invisibile)."""
+    components.html("""
+<script>
+const doc = window.parent.document;
+doc.querySelectorAll('[data-testid="stForm"]').forEach(function(form){
+  const ta = form.querySelector('textarea');
+  if(ta && !ta.dataset.enterBound){
+    ta.dataset.enterBound = "1";
+    ta.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' && !e.shiftKey && !e.isComposing){
+        e.preventDefault();
+        const btn = form.querySelector('[data-testid="stFormSubmitButton"] button');
+        if(btn) btn.click();
+      }
+    });
+  }
+});
+</script>
+""", height=0)
+
+
+def pannello_dati_chiave(T, meta, r):
+    """Popover 'Dati chiave' sovrapposto, nascosto di default e mostrato al
+    passaggio del mouse su un'icona fissa a sinistra (event listener JS
+    onmouseover/onmouseout), con pulsante di chiusura (×).
+
+    st.markdown non esegue <script>, quindi inietto HTML+JS via components.html:
+    dall'iframe (height=0, invisibile) lo script costruisce il popover dentro
+    window.parent.document, così fluttua sopra la pagina principale. I colori NON
+    sono cotti qui: il tema lo gestisce il CSS (classe 'app-dark' su <html>)."""
+    voci = [
+        ("#3b7dd8", T["m_length"], f"{r.lunghezza} {T['unit_aa']}"),
+        ("#7e57c2", T["m_mw"], f"{r.peso_molecolare/1000:.1f} kDa"),
+        ("#c0504d", T["m_pi"], f"{r.punto_isoelettrico:.2f}"),
+        ("#e8a33d", T["m_charge"], f"{r.carica_a_pH7:+.1f}"),
+        ("#17a2b8", T["m_gravy"], f"{r.gravy:+.3f}"),
+    ]
+    righe = "".join(
+        f'<div class="kp-row"><span class="kp-dot" style="background:{c}"></span>'
+        f'<span class="kp-l">{html.escape(str(l))}</span>'
+        f'<span class="kp-v">{html.escape(str(v))}</span></div>'
+        for c, l, v in voci
+    )
+    nome = ""
+    if meta and (meta.get("proteina") or meta.get("accession")):
+        n = meta.get("proteina") or meta.get("accession")
+        nome = f'<div class="kp-name">{html.escape(str(n))}</div>'
+    titolo = html.escape(str(T["sidebar_title"]))
+
+    inner = (
+        f"<style>{_KP_CSS}</style>"
+        '<div class="kp-trigger" id="kp-trigger" title="Dati chiave">🧬</div>'
+        '<div class="kp-panel" id="kp-panel">'
+        f'<div class="kp-head"><span class="kp-title">{titolo}</span>'
+        '<span class="kp-close" id="kp-close">&times;</span></div>'
+        f"{nome}{righe}</div>"
+    )
+
+    js = """
+const doc = window.parent.document;
+let root = doc.getElementById('keypanel-root');
+if(!root){ root = doc.createElement('div'); root.id='keypanel-root'; doc.body.appendChild(root); }
+root.innerHTML = %s;
+const trigger = doc.getElementById('kp-trigger');
+const panel   = doc.getElementById('kp-panel');
+const closeb  = doc.getElementById('kp-close');
+let t = null;
+const show = () => { if(t){clearTimeout(t); t=null;} panel.classList.add('open'); };
+const hide = () => { t = setTimeout(() => panel.classList.remove('open'), 200); };
+trigger.addEventListener('mouseover', show);
+trigger.addEventListener('mouseout',  hide);
+panel.addEventListener('mouseover', show);
+panel.addEventListener('mouseout',  hide);
+closeb.addEventListener('click', () => { if(t) clearTimeout(t); panel.classList.remove('open'); });
+""" % json.dumps(inner)
+
+    components.html(f"<script>{js}</script>", height=0)
+
+
 # ===================== INTERFACCIA =====================
 st.set_page_config(page_title="Protein sequence analyzer",
-                   page_icon="🧬", layout="wide")
+                   page_icon="🧬", layout="wide",
+                   initial_sidebar_state="collapsed")
 
 # --- Selettore di lingua (default: inglese), persistito nella URL ---
 LINGUE = {"English": "en", "Italiano": "it", "Español": "es",
@@ -1013,6 +1637,11 @@ with top_l:
     st.title(T["title"])
     st.caption(T["caption"])
 
+# Nasconde la sidebar nativa e prepara lo spazio per il popover 'Dati chiave'.
+prepara_layout_pannello()
+# Allinea i componenti custom al tema attivo in tempo reale (senza rerun).
+inietta_theme_watcher()
+
 # --- Ripristino dopo il refresh della pagina ---
 # Un refresh del browser crea una sessione nuova e azzera lo stato in memoria.
 # Per non perdere l'analisi, la sequenza viene salvata nella URL (query param):
@@ -1030,17 +1659,27 @@ def _imposta_sequenza(testo):
     st.session_state.seq_input = testo
     st.session_state.autorun = True        # rilancia l'analisi in automatico
 
-src1, src2 = st.columns(2)
-with src1:
+# Tre metodi di input in tab intercambiabili: mostra solo i campi necessari.
+tab_paste, tab_file, tab_uniprot = st.tabs(
+    [T["tab_paste"], T["tab_file"], T["tab_uniprot"]])
+
+# I metodi 'file' e 'UniProt' vengono eseguiti PRIMA di creare la text_area,
+# perché scrivono su st.session_state.seq_input (vedi _imposta_sequenza). L'ordine
+# del codice è indipendente dall'ordine visivo dei tab definito in st.tabs().
+with tab_file:
     up = st.file_uploader(T["upload_label"], type=["fasta", "fa", "faa", "txt", "seq"])
     if up is not None:
         fid = (up.name, up.size)
         if st.session_state.get("_ultimo_file") != fid:   # carica solo i file nuovi
             st.session_state._ultimo_file = fid
             _imposta_sequenza(up.getvalue().decode("utf-8", "ignore"))
-with src2:
-    acc = st.text_input(T["accession_label"], placeholder=T["accession_ph"], key="acc_input")
-    if st.button(T["btn_fetch"]) and acc.strip():
+with tab_uniprot:
+    # Form: premendo Invio nel campo accession parte il fetch (oltre al pulsante).
+    with st.form("form_uniprot", border=False):
+        acc = st.text_input(T["accession_label"], placeholder=T["accession_ph"],
+                            key="acc_input")
+        fetch_clic = st.form_submit_button(T["btn_fetch"])
+    if fetch_clic and acc.strip():
         with st.spinner(T["fetch_spinner"]):
             scaricato = fetch_uniprot(acc)
         if scaricato:
@@ -1048,12 +1687,19 @@ with src2:
         else:
             st.error(T["fetch_error"].format(acc=acc.strip()))
 
-seq_input = st.text_area(
-    T["input_label"], height=130, key="seq_input",
-    placeholder=T["input_placeholder"],
-)
+# 'Incolla sequenza' è il tab predefinito (il primo): contiene la text_area.
+with tab_paste:
+    # Form: nella text_area Ctrl/⌘+Invio avvia l'analisi (oltre al pulsante).
+    with st.form("form_paste", border=False):
+        seq_input = st.text_area(
+            T["input_label"], height=130, key="seq_input",
+            placeholder=T["input_placeholder"],
+        )
+        analizza = st.form_submit_button(T["btn_analyze"], type="primary")
 
-analizza = st.button(T["btn_analyze"], type="primary")
+# Nella casella sequenza: Invio = avvia analisi, Shift+Invio = a-capo.
+inietta_invio_submit()
+
 # autorun = analisi rilanciata in automatico dopo un refresh (vedi sopra)
 autorun = st.session_state.pop("autorun", False)
 
@@ -1111,24 +1757,39 @@ if testo:
     # >>> calcolo pesante nel core C++ <<<
     r = seq_core.analizza(pulita)
 
+    # Popover 'Dati chiave' (icona a sinistra, si apre al passaggio del mouse).
+    pannello_dati_chiave(T, meta, r)
+
     st.subheader(T["res_header"])
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric(T["m_length"], f"{r.lunghezza}", T["unit_aa"])
-    c2.metric(T["m_mw"], f"{r.peso_molecolare/1000:.1f} kDa")
-    c3.metric(T["m_pi"], f"{r.punto_isoelettrico:.2f}")
-    c4.metric(T["m_charge"], f"{r.carica_a_pH7:+.1f}")
-    c5.metric(T["m_bonds"], f"{r.legami_peptidici}")
-    c6.metric(T["m_disulfide"], T["disulfide_val"].format(n=r.ponti_disolfuro_max),
-              T["cys_delta"].format(n=r.cisteine))
+    # Metriche principali come griglia di card 'dashboard' (3×2).
+    griglia_metriche([
+        {"icon": "📏", "color": "#3b7dd8", "label": T["m_length"],
+         "value": f"{r.lunghezza}", "sub": T["unit_aa"]},
+        {"icon": "⚖️", "color": "#7e57c2", "label": T["m_mw"],
+         "value": f"{r.peso_molecolare/1000:.1f} kDa",
+         "sub": f"{r.peso_molecolare:,.0f} Da"},
+        {"icon": "🎯", "color": "#c0504d", "label": T["m_pi"],
+         "value": f"{r.punto_isoelettrico:.2f}", "sub": "pH"},
+        {"icon": "⚡", "color": "#e8a33d", "label": T["m_charge"],
+         "value": f"{r.carica_a_pH7:+.1f}", "sub": "pH 7"},
+        {"icon": "🔗", "color": "#2a9d8f", "label": T["m_bonds"],
+         "value": f"{r.legami_peptidici}", "sub": ""},
+        {"icon": "🧬", "color": "#4e9a5f", "label": T["m_disulfide"],
+         "value": T["disulfide_val"].format(n=r.ponti_disolfuro_max),
+         "sub": T["cys_delta"].format(n=r.cisteine)},
+    ], ncol=3)
 
     # --- Proprietà biochimiche aggiuntive (stile ProtParam, calcolo in C++) ---
-    b1, b2, b3 = st.columns(3)
     idro = T["gravy_hydrophobic"] if r.gravy > 0 else T["gravy_hydrophilic"]
-    b1.metric(T["m_gravy"], f"{r.gravy:+.3f}", idro, delta_color="off")
-    b2.metric(T["m_aliphatic"], f"{r.indice_alifatico:.1f}",
-              T["aliphatic_delta"], delta_color="off")
-    b3.metric(T["m_abs"], f"{r.abs280_ox:.2f}",
-              T["abs_delta"].format(v=f"{r.estinzione_ox:,.0f}"), delta_color="off")
+    griglia_metriche([
+        {"icon": "💧", "color": "#17a2b8", "label": T["m_gravy"],
+         "value": f"{r.gravy:+.3f}", "sub": idro},
+        {"icon": "🌡️", "color": "#d9822b", "label": T["m_aliphatic"],
+         "value": f"{r.indice_alifatico:.1f}", "sub": T["aliphatic_delta"]},
+        {"icon": "🔦", "color": "#5c6bc0", "label": T["m_abs"],
+         "value": f"{r.abs280_ox:.2f}",
+         "sub": T["abs_delta"].format(v=f"{r.estinzione_ox:,.0f}")},
+    ], ncol=3)
     with st.expander(T["exp_props"]):
         st.markdown(T["props_md"].format(
             gravy=f"{r.gravy:+.3f}", idro=idro, ali=f"{r.indice_alifatico:.1f}",
@@ -1177,20 +1838,26 @@ if testo:
         columns=[cc, cn, cq],
     )
     df[cp] = (100 * df[cq] / df[cq].sum()).round(2)
+    ch = T["hydro_legend"]
+    df[ch] = df[cc].map(HYDRO_KD)         # idrofobicità Kyte-Doolittle per residuo
     classi = {chiave(k): v for k, v in r.classi.items() if v > 0}
 
     d = df.sort_values(cq, ascending=False)
-    fig = px.bar(d, x=cc, y=cq, color=cq,
-                 color_continuous_scale="Blues", title=T["chart_freq_title"],
-                 hover_data=[cn, cp])
-    fig.update_layout(coloraxis_showscale=False,
-                      hoverlabel=dict(font_size=14, font_family="ui-monospace"))
-    # tooltip prominente sulla barra sotto il cursore
+    fig = px.bar(d, x=cc, y=cq, title=T["chart_freq_title"],
+                 hover_data=[cn, cp, ch])
+    # Barre colorate per idrofobicità (Kyte-Doolittle): stessa scala divergente
+    # della torta delle classi. Range simmetrico, così il neutro (KD≈0) sta al centro.
     fig.update_traces(
+        marker=dict(color=d[ch], colorscale=HYDRO_SCALE, cmin=-4.5, cmax=4.5,
+                    showscale=True,
+                    colorbar=dict(title=dict(text=ch, side="right"),
+                                  thickness=12, len=0.85, outlinewidth=0)),
         hovertemplate="<b>%{customdata[0]} (%{x})</b><br>"
                       + T["hv_count"] + ": %{y}<br>"
-                      + T["hv_pct"] + ": %{customdata[1]}%<extra></extra>",
+                      + T["hv_pct"] + ": %{customdata[1]}%<br>"
+                      + ch + ": %{customdata[2]:+.1f}<extra></extra>",
     )
+    fig.update_layout(hoverlabel=dict(font_size=14, font_family="ui-monospace"))
 
     # Classi: etichette nella lingua scelta, colori per indice (chiave canonica).
     classi_nomi = [CLASSI_LABEL.get(k, {}).get(lang, k) for k in classi.keys()]
@@ -1232,9 +1899,21 @@ if testo:
         )
 
     # --- RILEVATORE DI DOMINI DI MEMBRANA (calcolo nel core C++) ---
-    prof = seq_core.idrofobicita(pulita)
-    verdetto = VERDETTO_LABEL.get(prof.verdetto, {}).get(lang, prof.verdetto)
     st.subheader(T["mem_header"])
+
+    # Controlli: scala del profilo + finestra della media mobile.
+    ctl1, ctl2 = st.columns([1, 1])
+    scala_key = ctl1.selectbox(
+        T["scale_label"], list(SCALE_IDRO.keys()),
+        format_func=lambda k: SCALE_IDRO[k][0], key="idro_scala")
+    finestra = ctl2.select_slider(
+        T["window_label"], options=[7, 9, 11, 13, 15, 17, 19, 21, 23, 25],
+        value=19, key="idro_finestra")
+
+    # Il rilevamento TM (verdetto/segmenti/heatmap) resta su Kyte-Doolittle nel
+    # core C++, con la finestra scelta dall'utente.
+    prof = seq_core.idrofobicita(pulita, finestra=finestra)
+    verdetto = VERDETTO_LABEL.get(prof.verdetto, {}).get(lang, prof.verdetto)
 
     v1, v2 = st.columns([2, 1])
     if prof.n_domini == 0:
@@ -1243,18 +1922,61 @@ if testo:
         v1.info(f"**{verdetto}**")
     v2.metric(T["m_tm"], prof.n_domini)
 
-    # grafico del profilo con soglia e regioni TM evidenziate
-    fig_idro = px.line(x=list(prof.posizioni), y=list(prof.punteggi),
-                       labels={"x": T["ax_pos"], "y": T["ax_hydro"]},
-                       title=T["profile_title"])
-    fig_idro.update_traces(line_color="#1d2733")
-    fig_idro.add_hline(y=1.6, line_dash="dash", line_color="#c0504d",
-                       annotation_text=T["tm_threshold"])
+    # Curva del profilo: calcolata in Python con la scala scelta (così posso
+    # offrire scale alternative oltre a quella KD del core C++).
+    nome_scala, tabella_scala, scala_idrofoba = SCALE_IDRO[scala_key]
+    pos_idro, sco_idro = profilo_finestra(pulita, tabella_scala, finestra)
+    titolo_prof = f"{nome_scala} — {T['window_label']} {finestra}"
+
+    tema_idro = _tema_grafico()
+    # linea leggibile su entrambi i temi: azzurro chiaro sullo scuro, navy sul chiaro
+    linea_idro = "#9ec1f0" if tema_idro["template"] == "plotly_dark" else "#1d2733"
+    fig_idro = px.line(x=pos_idro, y=sco_idro,
+                       labels={"x": T["ax_pos"], "y": nome_scala},
+                       title=titolo_prof)
+    fig_idro.update_traces(line_color=linea_idro, line_width=2)
+    if scala_key == "kd":                 # soglia TM solo per Kyte-Doolittle
+        fig_idro.add_hline(y=1.6, line_dash="dash", line_color="#c0504d",
+                           annotation_text=T["tm_threshold"])
+    else:                                 # linea di riferimento allo zero
+        fig_idro.add_hline(y=0, line_dash="dot", line_color="#888")
     for i, s in enumerate(prof.segmenti, 1):
         fig_idro.add_vrect(x0=s.inizio, x1=s.fine, fillcolor="#2b6cb0",
                            opacity=0.18, line_width=0,
                            annotation_text=f"TM{i}", annotation_position="top")
-    st.plotly_chart(fig_idro)
+
+    # Profilo 2D + struttura 3D AlphaFold. Se c'è l'accession e il modello, uso
+    # il widget COMBINATO con cross-highlighting; altrimenti solo il profilo.
+    acc_3d = (meta.get("accession") if meta else None)
+    af = None
+    if acc_3d:
+        with st.spinner(T["struct3d_spinner"]):
+            af = fetch_alphafold(acc_3d)
+
+    if af:
+        soglia_w = 1.6 if scala_key == "kd" else None
+        visualizzatore_combinato(
+            pos_idro, sco_idro, prof.segmenti, af["pdb"],
+            asse_x=T["ax_pos"], asse_y=nome_scala, titolo=titolo_prof,
+            titolo_3d=T["struct3d_header"], soglia=soglia_w, linea=linea_idro,
+            scuro=(tema_idro["template"] == "plotly_dark"), altezza=400)
+        st.caption(T["crosshl_hint"])
+        note = [T["struct3d_plddt"], T["struct3d_source"].format(id=af.get("id", ""))]
+        if prof.segmenti and scala_key != "kd":
+            note.append(T["scale_tm_note"])
+        st.caption("  ·  ".join(note))
+    else:
+        col_prof, col_3d = st.columns([3, 2])
+        with col_prof:
+            st.plotly_chart(fig_idro, width="stretch")
+            if prof.segmenti and scala_key != "kd":   # TM = rilevate con KD
+                st.caption(T["scale_tm_note"])
+        with col_3d:
+            st.markdown(f"**{T['struct3d_header']}**")
+            if acc_3d:
+                st.info(T["struct3d_notfound"].format(acc=acc_3d))
+            else:
+                st.info(T["struct3d_need_acc"])
 
     heat = heatmap_sequenza(pulita, prof.segmenti)
     with st.expander(T["exp_tm_detail"], expanded=True):
@@ -1276,6 +1998,45 @@ if testo:
     report = costruisci_report_html(meta, r, prof, fig, fig2, fig_idro, fig_tit, heat, T, lang)
     st.download_button(T["btn_report"], data=report,
                        file_name=f"{T['report_prefix']}{nome_file}.html", mime="text/html")
+
+    # --- ESPORTAZIONE VETTORIALE DEI GRAFICI (SVG / PDF, per tesi/relazioni) ---
+    with st.expander(T["exp_export_header"]):
+        st.caption(T["exp_export_hint"])
+        fmt = st.radio(T["exp_export_format"], ["SVG", "PDF"],
+                       horizontal=True, key="export_fmt")
+        figure_export = [
+            (T["chart_freq_title"], "frequenza_aa", _fig_per_stampa(fig)),
+            (T["chart_classes_title"], "classi_chimiche", _fig_per_stampa(fig2)),
+            (titolo_prof, "profilo_idrofobicita",
+             _fig_per_stampa(fig_idro, line_scuro=True)),
+            (T["r_titration"], "titolazione", _fig_per_stampa(fig_tit)),
+        ]
+        if ss_tot > 0:
+            figure_export.append(
+                (T["ss_chart_title"], "struttura_secondaria", _fig_per_stampa(fig_ss)))
+
+        seq_key = f"{len(pulita)}:{pulita[:24]}"   # per invalidare export di altre sequenze
+        if st.button(T["exp_export_prepare"]):
+            ext = fmt.lower()
+            preparati = {}
+            try:
+                with st.spinner(T["exp_export_spinner"]):
+                    for label, base, f in figure_export:
+                        preparati[base] = (label, f.to_image(format=ext, scale=2))
+                st.session_state["export_files"] = {"ext": ext, "seq": seq_key,
+                                                     "items": preparati}
+            except Exception:
+                st.session_state.pop("export_files", None)
+                st.error(T["exp_export_error"])
+
+        exp = st.session_state.get("export_files")
+        if exp and exp.get("seq") == seq_key and exp.get("ext") == fmt.lower():
+            mime = "image/svg+xml" if exp["ext"] == "svg" else "application/pdf"
+            st.markdown(f"**{T['exp_export_ready']}**")
+            for base, (label, data) in exp["items"].items():
+                st.download_button(f"⬇️ {label} (.{exp['ext']})", data=data,
+                                   file_name=f"{base}.{exp['ext']}", mime=mime,
+                                   key=f"dl_{base}_{exp['ext']}")
 
     st.caption(T["caption_pi"])
 
